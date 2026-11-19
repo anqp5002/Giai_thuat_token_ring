@@ -76,19 +76,8 @@ class RingView(ttk.Frame):
         super().__init__(parent, padding=20, style="Page.TFrame")
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("Page.TFrame", background=PAGE)
-        style.configure("Treeview", background="#f6f8fc", fieldbackground="#f6f8fc",
-                        foreground=INK, rowheight=26, borderwidth=0)
-        style.configure("Treeview.Heading", background="#e8eef7", foreground=INK)
-        style.map("Treeview", background=[("selected", "#dbeafe")],
-                  foreground=[("selected", INK)])
-        for name, color in (("Borrow", "#2563eb"), ("Return", "#da8109"),
-                            ("Batch", "#7c3aed")):
-            style.configure(f"{name}.TButton", background=color, foreground="white",
-                            borderwidth=0, padding=(10, 6))
-            style.map(f"{name}.TButton",
-                      background=[("disabled", "#e2e8f0"), ("active", "#344b6e")],
-                      foreground=[("disabled", MUTED)])
+        self._dark = False
+        self._last_target = None
         self.members = members
         self.submit = submit
         self.device = tk.StringVar(value=next(iter(DEVICES)))
@@ -98,8 +87,14 @@ class RingView(ttk.Frame):
 
         header = tk.Frame(self, bg=CARD, padx=16, pady=12)
         header.pack(fill="x", pady=(0, 10))
-        self._label(header, "Token Ring Lab", size=20, bold=True).pack(anchor="w")
-        self._label(header, "Mượn trả thiết bị phòng lab", color=MUTED).pack(anchor="w")
+        self.theme_button = ttk.Button(
+            header, style="Theme.TButton", width=2, command=self.toggle_theme
+        )
+        self.theme_button.pack(side="right", anchor="n")
+        heading = tk.Frame(header, bg=CARD)
+        heading.pack(side="left")
+        self._label(heading, "Token Ring Lab", size=20, bold=True).pack(anchor="w")
+        self._label(heading, "Mượn trả thiết bị phòng lab", color=MUTED).pack(anchor="w")
 
         toolbar = tk.Frame(self, bg=CARD, padx=12, pady=8)
         toolbar.pack(fill="x", pady=(0, 10))
@@ -183,6 +178,58 @@ class RingView(ttk.Frame):
                            bg="#f6f8fc", fg=INK, relief="flat", padx=8, pady=6,
                            font=("Consolas", 10))
         self.log.pack(fill="both", expand=True, pady=(4, 0))
+        self._theme_widgets = list(self._collect_theme_widgets(self))
+        self._apply_theme()
+
+    def _collect_theme_widgets(self, parent):
+        for widget in parent.winfo_children():
+            if isinstance(widget, tk.Frame) and widget["bg"] in (PAGE, CARD):
+                yield widget, widget["bg"], None
+            elif isinstance(widget, tk.Label) and widget not in self.nodes.values():
+                yield widget, CARD, widget["fg"]
+            yield from self._collect_theme_widgets(widget)
+
+    def toggle_theme(self):
+        self._dark = not self._dark
+        self._apply_theme()
+
+    def _apply_theme(self):
+        colors = {
+            PAGE: "#0f172a", CARD: "#1e293b", INK: "#f1f5f9", MUTED: "#cbd5e1"
+        } if self._dark else {}
+        page, ink, muted = (colors.get(color, color) for color in (PAGE, INK, MUTED))
+        field = "#111c30" if self._dark else "#f6f8fc"
+        header = "#283952" if self._dark else "#e8eef7"
+        selected = "#24477a" if self._dark else "#dbeafe"
+        style = ttk.Style(self)
+        style.configure("Page.TFrame", background=page)
+        style.configure("Treeview", background=field, fieldbackground=field,
+                        foreground=ink, rowheight=26, borderwidth=0)
+        style.configure("Treeview.Heading", background=header, foreground=ink)
+        style.map("Treeview", background=[("selected", selected)],
+                  foreground=[("selected", ink)])
+        for name, color in (("Borrow", "#2563eb"), ("Return", "#a65808"),
+                            ("Batch", "#7c3aed"), ("Theme", header)):
+            foreground = ink if name == "Theme" else "white"
+            style.configure(f"{name}.TButton", background=color, foreground=foreground,
+                            borderwidth=0, padding=(4, 2) if name == "Theme" else (10, 6))
+            style.map(f"{name}.TButton",
+                      background=[("disabled", header), ("active", "#344b6e")],
+                      foreground=[("disabled", muted), ("active", "white")])
+        for widget, background, foreground in self._theme_widgets:
+            widget.configure(bg=colors.get(background, background))
+            if foreground is not None:
+                widget.configure(fg=colors.get(foreground, foreground))
+        self.log.configure(bg=field, fg=ink, selectbackground=selected, selectforeground=ink)
+        self.theme_button.configure(text="☀" if self._dark else "☾")
+        self._highlight_token()
+
+    def _highlight_token(self):
+        idle_bg, idle_fg = ("#293a50", "#e2e8f0") if self._dark else ("#e8eeeb", "#192b24")
+        for node, badge in self.nodes.items():
+            active = node == self._last_target
+            badge.configure(bg="#175c48" if active else idle_bg,
+                            fg="white" if active else idle_fg)
 
     @staticmethod
     def _label(parent, text="", *, variable=None, color=INK, size=10, bold=False,
@@ -199,10 +246,8 @@ class RingView(ttk.Frame):
     def update_token(self, sender, target, token, state):
         """Gọi trên luồng Tk sau khi nút đích xử lý gói token."""
         self.token_status.set(f"Lượt vừa xử lý: {target}   •   Số thứ tự: {token['seq']}")
-        for node, badge in self.nodes.items():
-            active = node == target
-            badge.configure(bg="#175c48" if active else "#e8eeeb",
-                            fg="white" if active else "#192b24")
+        self._last_target = target
+        self._highlight_token()
         for device, name in DEVICES.items():
             entry = state[device]
             label = "Sẵn sàng" if entry["status"] == "AVAILABLE" else "Đang mượn"
