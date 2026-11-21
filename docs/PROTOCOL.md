@@ -432,7 +432,9 @@ Ba trạng thái:
 - Chuyển sang `REJOINING` (TH11, TH13) khi một trong hai điều kiện đúng:
   - sau khi tỉnh lại (hết treo), thấy mình không nhận heartbeat nào trong khoảng thời gian dài hơn `NODE_DEAD`, hoặc
   - nhận message có `epoch` cao hơn `promised_epoch` của mình, khi đang `ACTIVE` (mục 3, trừ các loại message được miễn ở đó).
-- Ở `REJOINING`: bỏ token đang giữ, bỏ các yêu cầu đang chờ (trả `NO_QUORUM`), rồi đi lại luồng `JOIN_REQUEST` như `SYNCING`.
+- Ở `REJOINING`: bỏ token đang giữ, rồi đi lại luồng `JOIN_REQUEST` như `SYNCING`. Yêu cầu đang chờ chia hai loại:
+  - **Chưa ghi** (token chưa tới): trả `NO_QUORUM`, không ghi.
+  - **Đã ghi nhưng chưa có `TOKEN_ACK`**: kết quả chưa biết, **không** trả `NO_QUORUM`. Sau khi nhận `STATE_SYNC`, tra `request_id` trong `recent_requests`: có thì trả kết quả đã ghi (quy tắc (b) mục 6); không có thì coi như chưa ghi và đưa lại vào hàng đợi với cùng `request_id`.
 
 **Khởi động lạnh.** Dùng chung cho hai trường hợp: lần chạy đầu tiên, và cả cụm tắt hết rồi bật lại. Lúc đó không có Monitor nên không ai trả được `STATE_SYNC`:
 
