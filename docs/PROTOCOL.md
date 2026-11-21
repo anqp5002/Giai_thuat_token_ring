@@ -103,7 +103,7 @@ Mọi message có header ở mục 3. Bảng chỉ liệt kê trường **thêm 
 | `TOKEN_LOST` | `seq`, `skipped` | Bên gửi token chưa được ACK báo Monitor khi node kế tiếp bị coi là chết (mục 5) |
 | `HEARTBEAT` | `monitor`, `state_version`, `status` | Mỗi `HEARTBEAT_INTERVAL`, gửi tới mọi peer |
 | `EPOCH_PROPOSE` | `new_epoch` | Monitor gửi tới mọi node khi nghi mất token |
-| `EPOCH_VOTE` | `new_epoch`, `accept`, `state_version`, `state`, `recent_requests` | Node trả lời Monitor |
+| `EPOCH_VOTE` | `new_epoch`, `accept`, `state_version`, `state`, `recent_requests`; khi `accept = false` thêm `promised_epoch` | Node trả lời Monitor |
 | `ELECTION` | `initiator`, `ids[]` | Chuyển quanh vòng khi mất Monitor |
 | `COORDINATOR` | `monitor`, `members[]` | Initiator công bố kết quả bầu cử quanh vòng |
 | `JOIN_REQUEST` | (không có) | Node mới khởi động hoặc `REJOINING` gửi tới mọi peer |
@@ -112,10 +112,10 @@ Mọi message có header ở mục 3. Bảng chỉ liệt kê trường **thêm 
 Quy ước kiểu dữ liệu:
 
 - `state`: `{"DEV-01": {"status": "BORROWED", "borrowed_by": "M2", "loan_id": "req-0f3a91c2"}, "DEV-02": {"status": "AVAILABLE", "borrowed_by": null, "loan_id": null}}`. `status` là `AVAILABLE` hoặc `BORROWED`. `loan_id` bằng `request_id` của lần mượn đang diễn ra; là `null` khi `AVAILABLE`. Nhờ đó dữ liệu suy ra (`active_loan_id`, `state_hash`) giống nhau trên mọi node.
-- `recent_requests`: danh sách tối đa **50** phần tử gần nhất, mỗi phần tử `{"request_id", "node_id", "device_id", "action", "result"}`. Dùng để bỏ `request_id` trùng và trả lại kết quả cũ.
+- `recent_requests`: danh sách tối đa **50** phần tử gần nhất, mỗi phần tử `{"request_id", "node_id", "device_id", "action", "result", "loan_id"}`. Dùng để bỏ `request_id` trùng và trả lại kết quả cũ. `loan_id` là mã lượt mượn của yêu cầu thành công: `BORROW` thì bằng `request_id`; `RETURN` thì bằng `loan_id` mà thiết bị đang có trong `state` ngay trước khi trả (mục 6); yêu cầu lỗi thì `null`.
 - `holder`, `monitor`, `initiator`, `from`, `to`, phần tử của `ids` và `members`: đều là `id` dạng `"M1"`. So sánh lớn nhỏ khi bầu cử dùng `num` tra từ `config.json`, không so sánh chuỗi.
 - `status` trong `HEARTBEAT`: `SYNCING`, `ACTIVE` hoặc `REJOINING` (mục 9). Node `SYNCING` gửi `monitor = null`.
-- `EPOCH_VOTE` khi `accept = false`: các trường `state_version`, `state`, `recent_requests` có thể bỏ hoặc để `null`.
+- `EPOCH_VOTE` khi `accept = false`: **phải kèm `promised_epoch`** của node đó (epoch cao nhất nó đã hứa); các trường `state_version`, `state`, `recent_requests` có thể bỏ hoặc để `null`. Khi `accept = true` không cần `promised_epoch`.
 - `TOKEN_LOST`: `from` là node đã gửi token, `epoch` trong header là epoch của token, `seq` là số `seq` của lần chuyển không được ACK, `skipped` là `id` node kế tiếp bị coi là chết.
 
 **Định nghĩa "node còn sống"** (dùng khi chuyển token và đếm quorum để ghi, ở mục 5, 6, 7): có `HEARTBEAT` từ node đó trong vòng `NODE_DEAD` giây gần nhất **và** `status = ACTIVE`. Node luôn tính mình là sống. `members_alive` là tập các node sống.
@@ -203,8 +203,8 @@ Ví dụ message `TOKEN` (M1 chuyển cho M2), `TOKEN_ACK` tương ứng và `TO
     "DEV-03": {"status": "AVAILABLE", "borrowed_by": null, "loan_id": null}
   },
   "recent_requests": [
-    {"request_id": "req-0f3a91c2", "node_id": "M2", "device_id": "DEV-01", "action": "BORROW", "result": "SUCCESS"},
-    {"request_id": "req-7be410d8", "node_id": "M3", "device_id": "DEV-01", "action": "BORROW", "result": "ALREADY_BORROWED"}
+    {"request_id": "req-0f3a91c2", "node_id": "M2", "device_id": "DEV-01", "action": "BORROW", "result": "SUCCESS", "loan_id": "req-0f3a91c2"},
+    {"request_id": "req-7be410d8", "node_id": "M3", "device_id": "DEV-01", "action": "BORROW", "result": "ALREADY_BORROWED", "loan_id": null}
   ]
 }
 ```
@@ -247,7 +247,7 @@ Node chỉ ghi khi **đủ cả ba điều kiện**:
 Xử lý hàng đợi local (tuần tự từng yêu cầu khi giữ token):
 
 - `request_id` đã có trong `recent_requests` thì trả lại kết quả cũ đã ghi, **không ghi lại**.
-- Chưa có: kiểm tra yêu cầu (mã kết quả ở dưới). Nếu thành công thì ghi `state` (mượn: `borrowed_by` là node mượn, `loan_id` là `request_id` của yêu cầu; trả: `AVAILABLE`, `borrowed_by` và `loan_id` về `null`), tăng `state_version` thêm 1, lưu bản sao cục bộ; sau cùng chuyển token (mục 5). Kết quả (kể cả lỗi như `ALREADY_BORROWED`) được thêm vào `recent_requests`; khi vượt 50 phần tử thì bỏ phần tử cũ nhất.
+- Chưa có: kiểm tra yêu cầu (mã kết quả ở dưới). Nếu thành công thì ghi `state` (mượn: `borrowed_by` là node mượn, `loan_id` là `request_id` của yêu cầu; trả: node giữ token **đọc `loan_id` hiện tại của thiết bị trong `state` trước**, dùng làm `loan_id` của dòng kết quả, rồi mới đặt `AVAILABLE`, `borrowed_by` và `loan_id` về `null`), tăng `state_version` thêm 1, lưu bản sao cục bộ; sau cùng chuyển token (mục 5). Kết quả (kể cả lỗi như `ALREADY_BORROWED`) được thêm vào `recent_requests`; khi vượt 50 phần tử thì bỏ phần tử cũ nhất.
 - Node tự giữ yêu cầu đang chờ trong hàng đợi cục bộ cho tới khi **kết quả được xác định**, tức xảy ra **một trong hai**:
   - (a) nhận được `TOKEN_ACK` của token mang state mới. Khi đó state đã nằm trên ít nhất 2 máy (máy gửi và máy nhận).
   - (b) lần sau node giữ token, thấy `request_id` đó đã có trong `recent_requests`. Khi đó trả kết quả đã ghi, không ghi lại.
@@ -280,12 +280,12 @@ Dùng cho TH4 (mất token) và TH7 (node giữ token sập).
    - vừa thắng cử khi khởi động lạnh (mục 9).
 
    Monitor đặt `new_epoch = promised_epoch + 1` (khi khởi động lạnh: `max(promised_epoch của mình, epoch trong heartbeat mới nhất của các node khác) + 1`; xem mục 9), đặt `promised_epoch = new_epoch`, bỏ token đang giữ (nếu có), rồi gửi `EPOCH_PROPOSE{new_epoch}` tới mọi node.
-2. Node **đồng ý** khi `new_epoch > promised_epoch`. Khi đồng ý, node đặt `promised_epoch = new_epoch` (lưu bền vững **trước khi** trả lời), **bỏ token đang giữ (nếu có)**, đặt `max_seq_seen = -1`, rồi trả `EPOCH_VOTE{accept: true, state_version, state, recent_requests}` bằng bản sao state cục bộ. Không đồng ý thì trả `accept: false`.
+2. Node **đồng ý** khi `new_epoch > promised_epoch`. Khi đồng ý, node đặt `promised_epoch = new_epoch` (lưu bền vững **trước khi** trả lời), **bỏ token đang giữ (nếu có)**, đặt `max_seq_seen = -1`, rồi trả `EPOCH_VOTE{accept: true, state_version, state, recent_requests}` bằng bản sao state cục bộ. Không đồng ý (`new_epoch <= promised_epoch`) thì trả `EPOCH_VOTE{accept: false, promised_epoch}` kèm `promised_epoch` hiện tại của mình.
 3. Trong `VOTE_TIMEOUT`, nếu có ít nhất `quorum` phiếu đồng ý (tính cả Monitor) thì Monitor sinh token mới:
    - `epoch = new_epoch`, `seq = 0`, `holder` và `monitor` đều là Monitor
    - `state`, `state_version` lấy từ phiếu có `state_version` lớn nhất
    - `recent_requests` gộp từ các phiếu (bỏ trùng `request_id`, giữ tối đa 50 phần tử gần nhất)
-4. Không đủ phiếu thì **không sinh token**, thử lại ở chu kỳ `TOKEN_TIMEOUT` sau.
+4. Không đủ phiếu thì **không sinh token**. Nếu trong các phiếu có `accept: false`, Monitor thử lại **ngay** (không chờ chu kỳ sau) với `new_epoch = max(các promised_epoch nhận được, promised_epoch của mình) + 1`. Không có phiếu từ chối nào mà vẫn thiếu phiếu (node không trả lời) thì thử lại ở chu kỳ `TOKEN_TIMEOUT` sau.
 5. Khi khởi động lạnh, sinh token xong thì Monitor gửi `STATE_SYNC` cho mọi node đã bỏ phiếu đồng ý (mục 9).
 
 Token cũ nào còn sót lại (TH5) sẽ bị bên nhận hủy theo mục 5, bước 1, vì `epoch` của nó nhỏ hơn `promised_epoch`.
@@ -337,8 +337,24 @@ sequenceDiagram
     "DEV-03": {"status": "AVAILABLE", "borrowed_by": null, "loan_id": null}
   },
   "recent_requests": [
-    {"request_id": "req-c81d5e07", "node_id": "M3", "device_id": "DEV-02", "action": "BORROW", "result": "SUCCESS"}
+    {"request_id": "req-c81d5e07", "node_id": "M3", "device_id": "DEV-02", "action": "BORROW", "result": "SUCCESS", "loan_id": "req-c81d5e07"}
   ]
+}
+```
+
+Phiếu từ chối (`accept = false`) phải kèm `promised_epoch` của node đó. Ở ví dụ dưới, M2 đã hứa epoch 6 nên từ chối `new_epoch = 4`; Monitor thử lại ngay với `new_epoch = 7` (lớn hơn mọi `promised_epoch` đã nhận):
+
+```json
+{
+  "type": "EPOCH_VOTE",
+  "from": "M2",
+  "to": "M1",
+  "epoch": 6,
+  "lamport": 404,
+  "msg_id": "a8d3f6c1-5e92-4b07-9c4a-0f1b7e2d6a35",
+  "new_epoch": 4,
+  "accept": false,
+  "promised_epoch": 6
 }
 ```
 
@@ -422,7 +438,7 @@ Ba trạng thái:
 
 1. Node ở `SYNCING` gửi `JOIN_REQUEST` tới mọi peer.
 2. Hết `ELECTION_TIMEOUT` mà **đồng thời** (a) không nhận được `STATE_SYNC`, (b) không thấy heartbeat nào có `monitor` khác `null` (tức chưa ai báo đã có Monitor), và (c) đếm được ít nhất `quorum` node có heartbeat, tính cả mình, ở **mọi trạng thái**, thì node chạy bầu cử vòng (mục 8). Node đang `SYNCING` cũng được gắn `id` vào `ELECTION`.
-3. Node thắng cử chạy mục 7 **ngay** với `new_epoch = max(promised_epoch đã lưu của mình, trường epoch trong heartbeat mới nhất của các node khác) + 1`. Header `epoch` của heartbeat chính là `promised_epoch` mà mỗi node đã nạp từ `Storage` lúc `start()`, nên Monitor biết epoch cao nhất mà không cần thêm trường.
+3. Node thắng cử chạy mục 7 **ngay** với `new_epoch = max(promised_epoch đã lưu của mình, trường epoch trong heartbeat mới nhất của các node khác) + 1`. Header `epoch` của heartbeat chính là `promised_epoch` mà mỗi node đã nạp từ `Storage` lúc `start()`, nên Monitor có ước lượng ban đầu. Nếu vẫn bị từ chối vì thiếu node nào đó thì Monitor dựa vào `promised_epoch` trong phiếu `accept: false` để thử lại ngay (mục 7, bước 4).
 4. Mỗi phiếu `EPOCH_VOTE` gửi kèm state lưu trong DB cục bộ của node đó. Nếu không node nào có state đã lưu thì dùng state khởi tạo: 3 thiết bị `AVAILABLE` (`borrowed_by` và `loan_id` là `null`), `state_version = 0`.
 5. Sinh token xong, Monitor gửi `STATE_SYNC` cho mọi node đã bỏ phiếu đồng ý và tự chuyển sang `ACTIVE`. Các node đó nhận `STATE_SYNC` thì chuyển sang `ACTIVE` và gửi `HEARTBEAT` **ngay** (không chờ chu kỳ), để node đứng trước thấy `status = ACTIVE` kịp mà chuyển token.
 6. Phân mảnh 2-2 hoặc chỉ bật được 1-2 máy thì điều kiện (c) không đạt: các node ở lại `SYNCING`, chỉ xem, và tiếp tục gửi `JOIN_REQUEST`.
@@ -498,7 +514,7 @@ sequenceDiagram
     "DEV-03": {"status": "AVAILABLE", "borrowed_by": null, "loan_id": null}
   },
   "recent_requests": [
-    {"request_id": "req-c81d5e07", "node_id": "M3", "device_id": "DEV-02", "action": "BORROW", "result": "SUCCESS"}
+    {"request_id": "req-c81d5e07", "node_id": "M3", "device_id": "DEV-02", "action": "BORROW", "result": "SUCCESS", "loan_id": "req-c81d5e07"}
   ]
 }
 ```
@@ -618,7 +634,7 @@ Ví dụ `data` của một sự kiện `MESSAGE_DROPPED`:
   - `loan_id` nằm trong `state` của token, bằng `request_id` của lần mượn (mục 4), nên mọi node lưu cùng một `active_loan_id`.
   - `state_hash` = `"sha256:" + hexdigest` của chuỗi `json.dumps(state, sort_keys=True, separators=(",", ":"))` mã hóa UTF-8. Tính cục bộ trong `save_state`, không đi trong token.
   - `request_payload` chỉ lưu cục bộ cho yêu cầu do chính node này tạo, **không** đưa vào token. Với dòng `request_results` đến từ `recent_requests` của node khác thì `request_payload` là `NULL`.
-  - `request_results.loan_id` (khi `action = BORROW` và `result = SUCCESS`) bằng `request_id` của dòng đó; các trường hợp khác là `NULL`.
+  - `request_results.loan_id` lấy từ trường `loan_id` của phần tử `recent_requests`: `BORROW` thành công thì bằng `request_id`; `RETURN` thành công thì bằng `loan_id` của lượt mượn vừa được trả (người giữ token đọc từ `state` trước khi xóa). Yêu cầu lỗi thì `NULL`.
 
 **Storage cần sửa (báo Duy cập nhật `THIET_KE_DU_LIEU_KHO.md`):**
 
