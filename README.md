@@ -59,15 +59,15 @@ Nhóm dùng **bản gọn, bám slide**: state nằm trong token. Biểu quyết
 |----|----------|-----------|------------------|
 | TH1 | Vòng rảnh, token luân chuyển | Mở sẵn 4 máy | Token chạy đều quanh vòng |
 | TH2 | Một máy mượn/trả | Thao tác bình thường trên 1 máy | Thao tác thành công khi máy kế tiếp ACK |
-| TH3 | Tranh chấp đồng thời 1 máy chiếu | 4 người bấm Mượn cùng lúc; so sánh khi tắt và bật Token Ring | Có Token Ring thì chỉ một người mượn được |
+| TH3 | Tranh chấp đồng thời 1 máy chiếu | 4 người bấm Mượn cùng lúc; so sánh khi tắt và bật Token Ring | Bật Token Ring: 1 người mượn được, 3 người bị từ chối; tắt (chế độ không an toàn): có thể nhiều người cùng mượn |
 | TH4 | Mất token | Nút "Hủy Token" | Monitor đề xuất epoch + 1, đủ 3/4 đồng ý thì sinh token mới |
 | TH5 | Token cũ trễ mạng | Nút "Gửi lại Token cũ (Fake Lag)" | Token epoch cũ bị hủy |
-| TH6 | Máy thường sập lúc rảnh | Tắt app 1 máy | Vòng nối tắt qua máy đó |
-| TH7 | Máy sập lúc đang giữ token | Bật chế độ tự tắt app ngay khi nhận token | Tạo lại token theo TH4 |
+| TH6 | Máy thường sập lúc rảnh | Tắt app 1 máy | Vòng nối tắt qua máy đó; còn 3/4 nên vẫn Mượn/Trả được |
+| TH7 | Máy sập lúc đang giữ token | Bật chế độ tự tắt app ngay khi nhận token | Tạo lại token theo TH4; thao tác chưa có ACK thì người dùng gửi lại cùng `request_id`, không bị ghi 2 lần |
 | TH8 | Sập máy Monitor | Tắt app trên máy Monitor | Bầu cử vòng chọn Monitor mới |
 | TH9 | Hai máy sập cùng lúc | Tắt 2 app cùng lúc | 2 máy còn lại nối vòng với nhau nhưng khóa Mượn/Trả vì 2/4 < quorum 3; chỉ xem. Mở lại 1 máy thì ghi trở lại |
 | TH10 | Máy khởi động lại, vào lại vòng | Mở lại app | `JOIN_REQUEST` và đồng bộ state |
-| TH11 | Máy treo tạm thời | Nút "Đóng băng tiến trình 4s" | Máy tiếp tục sau khi hết đóng băng |
+| TH11 | Máy treo tạm thời | Nút "Đóng băng tiến trình 4s" | Đóng băng 4s lâu hơn NODE_DEAD 3s nên máy bị loại khỏi vòng; hết đóng băng thì bỏ token/liên kết cũ, chuyển REJOINING và JOIN lại như TH10 |
 | TH12 | Phân mảnh mạng 3-1 và 2-2 | Nút "Cô lập cụm" | 3-1: nhóm 3 máy ghi tiếp, máy lẻ chỉ xem; 2-2: cả hai bên chỉ xem |
 | TH13 | (tùy chọn) Hợp nhất mạng | Bỏ cô lập | Nhóm thiểu số nhận epoch + state mới rồi vào lại vòng |
 | TH14 | (tùy chọn) Mất token/ACK khi chuyển | Nút bỏ message ở tầng ứng dụng | Gửi lại cùng `seq`, bên nhận bỏ token trùng |
