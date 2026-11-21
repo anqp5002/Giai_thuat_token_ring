@@ -73,7 +73,7 @@ Ràng buộc: thời gian `freeze` ở TH11 (4s) phải lớn hơn `NODE_DEAD` (
 | `msg_id` | UUID của message, dùng cho log |
 
 - **Lamport:** khi gửi thì `lamport += 1` rồi ghi vào message; khi nhận thì `lamport = max(local, recv) + 1`. Lamport chỉ dùng để sắp xếp log, **không dùng để quyết định**.
-- **Nhận message có `epoch` cao hơn `promised_epoch` của mình** (trừ `EPOCH_PROPOSE`, `JOIN_REQUEST` và `STATE_SYNC`): node chưa bỏ phiếu cho epoch đó nên đang lạc hậu; chuyển sang `REJOINING` (mục 9).
+- **Nhận message có `epoch` cao hơn `promised_epoch` của mình** (trừ `EPOCH_PROPOSE`, `EPOCH_VOTE`, `JOIN_REQUEST` và `STATE_SYNC`): node chưa bỏ phiếu cho epoch đó nên đang lạc hậu; chuyển sang `REJOINING` (mục 9). Luật này **chỉ áp dụng cho node đang `ACTIVE`**. Node `SYNCING` hoặc `REJOINING` đã nằm trong luồng gia nhập (`JOIN_REQUEST`, `STATE_SYNC`) nên không bị chuyển trạng thái vì epoch cao hơn, và khởi động lạnh cũng chạy theo luật ở mục 9. Ngoại lệ `EPOCH_VOTE` là do phiếu từ chối mang header `epoch` bằng `promised_epoch` cao hơn của người từ chối; Monitor dùng giá trị đó để thử lại với `max + 1` (mục 7, bước 4) thay vì tự chuyển `REJOINING`.
 - Node nhận message sai định dạng hoặc `type` lạ thì bỏ và phát sự kiện `MESSAGE_DROPPED` kèm lý do.
 
 Ví dụ một message (đã xuống dòng cho dễ đọc; trên đường truyền là một dòng):
@@ -431,7 +431,7 @@ Ba trạng thái:
 - Không cần bước "chèn vào vòng" riêng: thứ tự vòng đã cố định, nên khi node đứng trước thấy heartbeat `ACTIVE` của node vừa vào thì tự chuyển token cho nó (mục 5).
 - Chuyển sang `REJOINING` (TH11, TH13) khi một trong hai điều kiện đúng:
   - sau khi tỉnh lại (hết treo), thấy mình không nhận heartbeat nào trong khoảng thời gian dài hơn `NODE_DEAD`, hoặc
-  - nhận message có `epoch` cao hơn `promised_epoch` của mình (mục 3).
+  - nhận message có `epoch` cao hơn `promised_epoch` của mình, khi đang `ACTIVE` (mục 3, trừ các loại message được miễn ở đó).
 - Ở `REJOINING`: bỏ token đang giữ, bỏ các yêu cầu đang chờ (trả `NO_QUORUM`), rồi đi lại luồng `JOIN_REQUEST` như `SYNCING`.
 
 **Khởi động lạnh.** Dùng chung cho hai trường hợp: lần chạy đầu tiên, và cả cụm tắt hết rồi bật lại. Lúc đó không có Monitor nên không ai trả được `STATE_SYNC`:
