@@ -2,6 +2,73 @@
 
 Tài liệu này là hợp đồng giữa 4 phần: **core** (lõi giao thức), **fault** (chịu lỗi), **storage** (lưu trữ, đo số liệu) và **ui** (giao diện). Tên trường và tên message trong đây là chuẩn; muốn đổi thì sửa tài liệu này trước, rồi mới sửa code.
 
+## 0. Thuật ngữ
+
+Ví dụ dùng chung: 4 máy `M1..M4` ngồi thành vòng và chuyền nhau một cây bút. Ai cầm bút mới được ghi vào sổ mượn thiết bị.
+
+### Cơ bản
+
+| Thuật ngữ | Nghĩa | Ví dụ |
+|---|---|---|
+| **Token (thẻ bài)** | Message duy nhất chạy quanh vòng; máy đang giữ token mới được sửa dữ liệu | Cây bút |
+| **Critical section (CS)** | Đoạn việc mà tại mỗi lúc chỉ một máy được làm | Ghi "M2 mượn máy chiếu" vào sổ |
+| **Loại trừ tương hỗ** | Bảo đảm không bao giờ có hai máy cùng ở trong CS | Hai người không thể cùng mượn một máy chiếu |
+| **State** | Trạng thái kho thiết bị; dự án này để state đi kèm trong token | `DEV-01: BORROWED, borrowed_by: M2` |
+| **`state_version`** | Số phiên bản của state, mỗi lần ghi thì tăng 1 | Version 57 mới hơn version 56; khi phải chọn thì lấy bản có version lớn nhất |
+
+### Chống token cũ, token trùng
+
+| Thuật ngữ | Nghĩa | Ví dụ |
+|---|---|---|
+| **`epoch`** | Thế hệ của token. Mỗi lần mất token và phải tạo lại thì epoch tăng 1; mọi token thuộc thế hệ cũ đều bị vô hiệu | Lớp làm mất bút số 3 nên phát bút số 4; ai còn cầm bút số 3 thì bị bỏ qua (TH5) |
+| **`promised_epoch`** | Epoch cao nhất mà một máy đã đồng ý; token có epoch thấp hơn số này bị máy đó hủy | M2 đã đồng ý dùng bút số 4 nên gặp bút số 3 là bỏ |
+| **`seq`** | Số thứ tự của từng lần chuyền token trong cùng một epoch | Lần chuyền thứ 128; nhận lại lần 128 lần nữa thì biết là bản trùng (TH14) |
+| **`TOKEN_ACK`** | Máy nhận báo lại "tôi đã nhận token" | M3 nói "đã cầm bút". M2 chưa nghe câu đó thì chưa được coi là đã chuyền xong |
+| **`TOKEN_LOST`** | Máy gửi báo Monitor rằng token có thể đã mất | M2 chuyền cho M3 mà chưa có ACK thì M3 chết, nên M2 báo Monitor để làm bút mới |
+
+### Phát hiện máy sập
+
+| Thuật ngữ | Nghĩa | Ví dụ |
+|---|---|---|
+| **Heartbeat** | Cứ mỗi giây, mỗi máy gửi tin "tôi còn sống" cho các máy khác | Điểm danh mỗi giây |
+| **`NODE_DEAD` (3s)** | Quá 3 giây không có heartbeat thì máy đó bị coi là chết | Vì vậy ở TH11, đóng băng 4 giây là bị loại khỏi vòng |
+| **`TOKEN_TIMEOUT` (6s)** | Quá 6 giây Monitor không thấy token quay về thì nghi token đã mất | TH4 (nút "Hủy Token") |
+| **Timeout** | Thời gian chờ tối đa. Hết timeout chỉ là *nghi ngờ*, vì mạng có thể chỉ đang chậm | Vì thế tạo lại token phải qua biểu quyết |
+
+### Điều phối
+
+| Thuật ngữ | Nghĩa | Ví dụ |
+|---|---|---|
+| **Monitor** | Máy làm "giám thị": phát hiện mất token và tạo lại token. Ý tưởng lấy từ Active Monitor của IEEE 802.5 | Máy có biểu tượng vương miện trên giao diện |
+| **Quorum (3/4)** | Số máy tối thiểu phải còn sống hoặc phải đồng ý thì mới được ghi; bằng quá nửa, `floor(N/2)+1` | Chỉ còn 2 máy (TH9) thì khóa Mượn/Trả, chỉ được xem |
+| **`EPOCH_PROPOSE` / `EPOCH_VOTE`** | Monitor đề xuất lên epoch mới, các máy bỏ phiếu; có ít nhất quorum phiếu đồng ý thì mới sinh token mới | Không máy nào tự ý "in thêm bút" được |
+| **Bầu cử vòng (`ELECTION` / `COORDINATOR`)** | Thuật toán ở slide 12. Khi Monitor chết, `ELECTION` chạy quanh vòng để gom ID của các máy còn sống; máy có ID lớn nhất làm Monitor mới; kết quả thông báo bằng `COORDINATOR` | M4 chết, gom được {1,2,3}, nên M3 làm Monitor |
+| **Split-brain / phân mảnh mạng** | Mạng bị chia thành hai cụm, cụm nào cũng tưởng mình là cả hệ thống | Chia 2-2 thì không cụm nào đủ 3 máy, cả hai chỉ được xem (TH12) |
+
+### Gia nhập lại
+
+| Thuật ngữ | Nghĩa |
+|---|---|
+| **`SYNCING`** | Máy vừa bật, đang xin dữ liệu, chưa được nhận token |
+| **`ACTIVE`** | Máy đã đồng bộ xong và đang chạy bình thường trong vòng |
+| **`REJOINING`** | Máy phát hiện mình đã bị loại (ví dụ vì bị treo), nên bỏ token cũ và xin vào lại vòng |
+| **`JOIN_REQUEST` / `STATE_SYNC`** | Máy gửi "cho tôi vào vòng", Monitor trả lại state và epoch mới nhất |
+| **Khởi động lạnh** | Cả 4 máy cùng bật lần đầu, chưa có Monitor và chưa có token; các máy bầu cử trước rồi mới tạo token đầu tiên |
+
+### Chống ghi trùng
+
+| Thuật ngữ | Nghĩa | Ví dụ |
+|---|---|---|
+| **`request_id`** | Mã riêng của từng yêu cầu mượn hoặc trả | Gửi lại với cùng mã thì hệ thống biết là yêu cầu cũ, không ghi lần hai |
+| **`recent_requests`** | 50 `request_id` vừa xử lý gần nhất, đi kèm trong token | Nhờ danh sách này, máy biết yêu cầu của mình đã thành công dù bị mất ACK |
+| **`loan_id`** | Mã của một lượt mượn, bằng `request_id` của lần mượn đó | Dùng để biết lần trả nào ứng với lần mượn nào |
+| **`state_hash`** | Dấu vân tay của state (sha256); 4 máy có cùng hash nghĩa là dữ liệu giống nhau | Dùng để kiểm 4 bản sao có khớp nhau không |
+
+### Khác
+
+- **Lamport timestamp:** đồng hồ logic, cứ gửi hoặc nhận message là tăng số đếm. Chỉ dùng để xếp log theo thứ tự trước sau, không dùng để quyết định.
+- **Chaos hooks:** các nút giả lập lỗi trên giao diện (Hủy Token, Fake Lag, Đóng băng, Cô lập cụm...), dùng để diễn các trường hợp lúc demo.
+
 ## 1. Phạm vi và giả định
 
 - Đây là **bản gọn, bám slide**: state nằm trong token. Biểu quyết 3/4 chỉ dùng khi **đổi epoch** (mục 7) và **bầu Monitor** (mục 8), không dùng cho từng thao tác mượn/trả.
